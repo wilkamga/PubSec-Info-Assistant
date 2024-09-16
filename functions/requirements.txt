@@ -5,6 +5,9 @@
 #### Any version change made here should also be made and tested for the web apps in /app/backend and /app/enrichment
 
 azure-functions == 1.17.0
+openai==1.27.0
+azure-identity==1.16.1
+azure-search-documents==11.6.0b1
 tiktoken==0.4.0
 azure.ai.formrecognizer==3.2.1
 azure-storage-blob==12.16.0
@@ -16,5 +19,5 @@ nltk == 3.9.1
 tenacity == 8.2.3
 unstructured[csv,doc,docx,email,html,md,msg,ppt,pptx,text,xlsx,xml] == 0.15.9
 pyoo == 1.4
-azure-search-documents == 11.4.0b11
+#azure-search-documents == 11.4.0b11
 beautifulsoup4 == 4.12.2

@@ -29,6 +29,16 @@ variable "sku" {
   type = map(string)
 }
 
+variable "tenantId" {
+  type    = string
+  default = ""
+}
+
+variable "subscriptionId" {
+  type    = string
+  default = ""
+}
+
 variable "resourceGroupName" {
   type    = string
   default = ""
@@ -38,6 +48,12 @@ variable "storageAccountId" {
   type    = string
   default = ""
 }
+
+variable "vi_name" {
+  type    = string
+  default = ""
+}
+
 
 variable "keyVaultUri" { 
   type = string
@@ -246,4 +262,19 @@ variable "azureSearchServiceEndpoint" {
 variable "endpointSuffix" {
   type    = string
   default = "core.windows.net"
+}
+
+variable "openaiServicesEndpoint" {
+  description = "Endpoint of OpenAI Service"
+  type        = string
+}
+
+variable "chatGptDeploymentName" {
+  description = "Deployment of OpenAI Service"
+  type        = string
+}
+
+variable "azureOpenAIEmbeddingDeploymentName" {
+  description = "Embedding Deplyment Model of OpenAI Service"
+  type        = string
 }

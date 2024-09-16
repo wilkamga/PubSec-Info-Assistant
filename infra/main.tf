@@ -308,6 +308,9 @@ module "functions" {
   kind                                  = "linux"
   runtime                               = "python"
   resourceGroupName                     = azurerm_resource_group.rg.name
+  tenantId                              = var.tenantId
+  subscriptionId                        = var.subscriptionId
+  vi_name                               = "infoasst-avi-${random_string.random.result}"
   appInsightsConnectionString           = module.logging.applicationInsightsConnectionString
   appInsightsInstrumentationKey         = module.logging.applicationInsightsInstrumentationKey
   blobStorageAccountName                = module.storage.name
@@ -347,6 +350,9 @@ module "functions" {
   azureSearchIndex                      = var.searchIndexName
   azureSearchServiceEndpoint            = module.searchServices.endpoint
   endpointSuffix                        = var.azure_storage_domain
+  openaiServicesEndpoint = var.useExistingAOAIService ? "https://${var.azureOpenAIServiceName}.${var.azure_openai_domain}/" : module.openaiServices.endpoint
+  chatGptDeploymentName = var.chatGptDeploymentName != "" ? var.chatGptDeploymentName : (var.chatGptModelName != "" ? var.chatGptModelName : "gpt-35-turbo-16k")
+  azureOpenAIEmbeddingDeploymentName = var.useAzureOpenAIEmbeddings ? var.azureOpenAIEmbeddingDeploymentName : var.sentenceTransformersModelName
 
   depends_on = [
     module.storage,

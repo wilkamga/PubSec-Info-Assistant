@@ -148,6 +148,10 @@ resource "azurerm_linux_function_app" "function_app" {
     ENRICHMENT_KEY = "@Microsoft.KeyVault(SecretUri=${var.keyVaultUri}secrets/ENRICHMENT-KEY)"
     ENRICHMENT_ENDPOINT = var.enrichmentEndpoint
     ENRICHMENT_NAME = var.enrichmentName
+    VI_ACCOUNT_NAME = var.vi_name
+    RESOURCE_GROUP_NAME = var.resourceGroupName
+    SUBSCRIPTION_ID = "@Microsoft.KeyVault(SecretUri=${var.keyVaultUri}secrets/AZURE-SUBSCRIPTION-ID)"
+    AZURE_TENANT_ID = "@Microsoft.KeyVault(SecretUri=${var.keyVaultUri}secrets/AZURE-TENANT-ID)"
     ENRICHMENT_LOCATION = var.enrichmentLocation
     TARGET_TRANSLATION_LANGUAGE = var.targetTranslationLanguage
     MAX_ENRICHMENT_REQUEUE_COUNT = var.maxEnrichmentRequeueCount
@@ -158,6 +162,10 @@ resource "azurerm_linux_function_app" "function_app" {
     COSMOSDB_KEY = "@Microsoft.KeyVault(SecretUri=${var.keyVaultUri}secrets/COSMOSDB-KEY)"
     AZURE_SEARCH_SERVICE_ENDPOINT = var.azureSearchServiceEndpoint
     AZURE_SEARCH_INDEX = var.azureSearchIndex
+    AZURE_OPENAI_SERVICE  = var.openaiServicesEndpoint
+    AZURE_OPENAI_API_KEY = "@Microsoft.KeyVault(SecretUri=${var.keyVaultUri}secrets/AZURE-OPENAI-SERVICE-KEY)"
+    AZURE_OPENAI_CHATGPT_DEPLOYMENT  = var.chatGptDeploymentName
+    AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT = var.azureOpenAIEmbeddingDeploymentName
   }
 
   identity {
