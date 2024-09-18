@@ -1,12 +1,13 @@
 import json
 import logging
 import os
-import time
+import hashlib
 from typing import Optional
 
 import azure.functions as func
 import requests
 from azure.storage.blob import BlobServiceClient
+from azure.cosmos import CosmosClient, exceptions
 from shared_code.status_log import State, StatusClassification, StatusLog
 from shared_code.utilities import Utilities, MediaType
 
@@ -16,9 +17,6 @@ from vi_search.prep_scenes import get_sections_generator
 from vi_search.language_models.language_models import LanguageModels
 from vi_search.prompt_content_db.prompt_content_db import PromptContentDB, VECTOR_FIELD_NAME
 from vi_search.vi_client.video_indexer_client import init_video_indexer_client, VideoIndexerClient
-
-from azure.search.documents import SearchClient
-from azure.search.documents.indexes.models import SearchIndex, SimpleField, SearchableField
 
 from azure.core.credentials import AzureKeyCredential
 from datetime import datetime
@@ -48,6 +46,8 @@ cosmosdb_url = os.environ["COSMOSDB_URL"]
 cosmosdb_key = os.environ["COSMOSDB_KEY"]
 cosmosdb_log_database_name = os.environ["COSMOSDB_LOG_DATABASE_NAME"]
 cosmosdb_log_container_name = os.environ["COSMOSDB_LOG_CONTAINER_NAME"]
+cosmosdb_media_database_name = "mediadb"
+cosmosdb_media_container_name = "mediahashes"
 
 # Cognitive Services
 cognitive_services_key = os.environ["ENRICHMENT_KEY"]
@@ -91,74 +91,41 @@ utilities = Utilities(
     azure_blob_storage_key=azure_blob_storage_key
 )
 
+# Initialize CosmosClient
+cosmos_client = CosmosClient(url=cosmosdb_url, credential=cosmosdb_key)
+# Initialize BlobServiceClient
+blob_service_client = BlobServiceClient.from_connection_string(azure_blob_connection_string)
 
-def wait_for_video_processing(client: VideoIndexerClient, video_id: dict, get_insights: bool = False,
-                              timeout: int = 600) -> Optional[dict[str, dict]]:
-    start = time.time()
+def generate_video_hash(blob_client):
+    """Generate MD5 hash for the video file."""
+    hash_md5 = hashlib.md5()
+    stream = blob_client.download_blob().readall()
+    hash_md5.update(stream)
+    return hash_md5.hexdigest()
 
-    insights = {}
-    while True:
-        res = client.is_video_processed(video_id)
-        if res:
-            print(f"Video {video_id} processing completed.")
-            if get_insights:
-                insights = client.get_video_async(video_id)
-            break
+def check_video_exists(video_hash):
+    """Check if the video hash already exists in the Cosmos DB."""
+    container = cosmos_client.get_database_client(cosmosdb_media_database_name).get_container_client(cosmosdb_media_container_name)
+    try:
+        item = container.read_item(item=video_hash, partition_key=video_hash)
+        return True
+    except exceptions.CosmosResourceNotFoundError:
+        return False
 
-        elapsed = time.time() - start
-        if elapsed > timeout:
-            raise TimeoutError(f"Timeout reached.")
+def upload_video_hash(video_id, file_name, video_hash):
+    """Upload the video hash and video ID to the Cosmos DB."""
+    container = cosmos_client.get_database_client(cosmosdb_media_database_name).get_container_client(cosmosdb_media_container_name)
+    container.upsert_item({
+        'id': video_hash,
+        'video_id': video_id,
+        'file_name': file_name
+    })
 
-        if elapsed % 20 == 0:
-            print(
-                f"Elapsed time: {time.time() - start} seconds. Waiting for video to process.")
-
-        time.sleep(1)
-
-    print(f"Video processing completed, took {time.time() - start} seconds")
-
-    if get_insights:
-        return insights
-
-
-def detect_language(text):
-    data = {
-        "kind": "LanguageDetection",
-        "analysisInput": {
-            "documents": [
-                {
-                    "id": "1",
-                    "text": text[:MAX_CHARS_FOR_DETECTION]
-                }
-            ]
-        }
-    }
-
-    response = requests.post(
-        API_DETECT_ENDPOINT, headers=translator_api_headers, json=data
-    )
-    if response.status_code == 200:
-        print(response.json())
-        detected_language = response.json(
-        )["results"]["documents"][0]["detectedLanguage"]["iso6391Name"]
-        detection_confidence = response.json(
-        )["results"]["documents"][0]["detectedLanguage"]["confidenceScore"]
-
-    return detected_language, detection_confidence
-
-
-def translate_text(text, target_language):
-    data = [{"text": text}]
-    params = {"to": target_language}
-
-    response = requests.post(
-        API_TRANSLATE_ENDPOINT, headers=translator_api_headers, json=data, params=params
-    )
-    if response.status_code == 200:
-        translated_content = response.json()[0]["translations"][0]["text"]
-        return translated_content
-    else:
-        raise Exception(response.json())
+def get_existing_video_id(video_hash):
+    """Get the existing video ID from the Cosmos DB."""
+    container = cosmos_client.get_database_client(cosmosdb_media_database_name).get_container_client(cosmosdb_media_container_name)
+    item = container.read_item(item=video_hash, partition_key=video_hash)
+    return item['video_id']
 
 
 def main(msg: func.QueueMessage) -> None:
@@ -174,6 +141,7 @@ def main(msg: func.QueueMessage) -> None:
         statusLog = StatusLog(
             cosmosdb_url, cosmosdb_key, cosmosdb_log_database_name, cosmosdb_log_container_name
         )
+        
         logging.info(
             "Python queue trigger function processed a queue item: %s",
             msg.get_body().decode("utf-8"),
@@ -186,12 +154,29 @@ def main(msg: func.QueueMessage) -> None:
             State.PROCESSING,
         )
 
-        # Run the image through the Computer Vision service
+        # Run the image through the Video Indexer service
         file_name, file_extension, file_directory = utilities.get_filename_and_extension(
             blob_path)
         blob_path_plus_sas = utilities.get_blob_and_sas(blob_path)
 
         data = {"url": f"{blob_path_plus_sas}"}
+
+        blob_name = blob_path.split("/", 1)[1]
+
+        blob_client = blob_service_client.get_blob_client(container=azure_blob_drop_storage_container, blob=blob_name)
+        blob_properties = blob_client.get_blob_properties()
+        tags = blob_properties.metadata.get("tags")
+        if tags is not None:
+            if isinstance(tags, str):
+                tags_list = [tags]
+            else:
+                tags_list = tags.split(",")
+        else:
+            tags_list = []
+        # Write the tags to cosmos db
+        statusLog.update_document_tags(blob_path, tags_list)
+
+        video_hash = generate_video_hash(blob_client)
 
         azure_config = {
             'AccountName': viAccountName,
@@ -201,29 +186,39 @@ def main(msg: func.QueueMessage) -> None:
 
         client = init_video_indexer_client(azure_config)
 
-        supported_extensions: list = ['.mp4', '.mov', '.avi']
-
-        if file_extension not in supported_extensions:
-            print(f"Unsupported video format: {file_name}. Skipping...")
-            logging.error("%s - Media analysis failed for %s: %s",
-                          FUNCTION_NAME,
-                          blob_path,
-                          "Unsupported video format: {file_name}.")
-            statusLog.upsert_document(
-                blob_path,
-                f"{FUNCTION_NAME} - Media analysis failed: Unsupported video format: {file_name}.",
-                StatusClassification.ERROR,
-                State.ERROR,
-            )
+        if check_video_exists(video_hash):
+            print("Video already exists. Skipping...")
+            video_id = get_existing_video_id(video_hash)
+            logging.info("%s - Media upload skipped for %s: %s",
+                            FUNCTION_NAME,
+                            blob_path,
+                            "Video: {file_name}, already exists.")
         else:
-            print(f"Processing video: {file_name}")
-            video_id = client.upload_url_async(
-                video_name=file_name,
-                video_url=blob_path_plus_sas,
-                wait_for_index=True
-            )
-        """ if client.get_video_async(video_id):
-            print(f"Media already exist: {file_name}. Skipping...") """
+            supported_extensions: list = ['.mp4', '.mov', '.avi']
+
+            if file_extension not in supported_extensions:
+                print(f"Unsupported video format: {file_name}. Skipping...")
+                logging.error("%s - Media analysis failed for %s: %s",
+                            FUNCTION_NAME,
+                            blob_path,
+                            "Unsupported video format: {file_name}.")
+                statusLog.upsert_document(
+                    blob_path,
+                    f"{FUNCTION_NAME} - Media analysis failed: Unsupported video format: {file_name}.",
+                    StatusClassification.ERROR,
+                    State.ERROR,
+                )
+            else:
+                print(f"Processing video: {file_name}")
+                video_id = client.upload_url_async(
+                    video_name=file_name,
+                    video_url=blob_path_plus_sas,
+                    wait_for_index=True
+                )
+                print(f"Video uploaded: {video_id} to AVI.")
+                # Track the video hash
+                upload_video_hash(video_id, blob_name, video_hash)
+
         ### Getting indexed videos prompt content ###
         video_prompt_content = client.get_prompt_content(video_id)
 
@@ -238,31 +233,24 @@ def main(msg: func.QueueMessage) -> None:
         ### Creating new DB ###
         prompt_content_db : PromptContentDB = AzureVectorSearch()
         db_name = "vi-prompt-content-index"
-        prompt_content_db.create_db(db_name, vector_search_dimensions=embeddings_size)
-        prompt_content_db.add_sections_to_db(sections_generator, upload_batch_size=100, verbose=verbose)
 
-        print("Done adding sections to DB. Exiting...")
-        
-        # Upload the output as a chunk to match document model
-        """ utilities.write_chunk(
-            myblob_name=blob_path,
-            myblob_uri=blob_uri,
-            file_number=0,
-            chunk_size=utilities.token_count(text_image_summary),
-            chunk_text=text_image_summary,
-            page_list=[0],
-            section_name="",
-            title_name=file_name,
-            subtitle_name="",
-            file_class=MediaType.IMAGE
-        ) """
-
-        statusLog.upsert_document(
-            blob_path,
-            f"{FUNCTION_NAME} - Media enrichment is complete",
-            StatusClassification.DEBUG,
-            State.QUEUED,
-        )
+        try:
+            prompt_content_db.create_db(db_name, vector_search_dimensions=embeddings_size)
+            prompt_content_db.add_sections_to_db(sections_generator, upload_batch_size=100, verbose=verbose)
+            statusLog.upsert_document(
+                blob_path,
+                f"{FUNCTION_NAME} - Media added to index -> Media enrichment is complete.",
+                StatusClassification.INFO,
+                State.COMPLETE,
+            )
+            print("Done adding sections to DB. Exiting...")
+        except Exception as err:
+            statusLog.upsert_document(
+                blob_path,
+                f"{FUNCTION_NAME} - An error occurred while indexing - {str(err)}",
+                StatusClassification.ERROR,
+                State.ERROR,
+            )
 
     except Exception as error:
         statusLog.upsert_document(
@@ -271,75 +259,4 @@ def main(msg: func.QueueMessage) -> None:
             StatusClassification.ERROR,
             State.ERROR,
         )
-
-    """ try:
-        file_name, file_extension, file_directory = utilities.get_filename_and_extension(
-            blob_path)
-
-        # Get the tags from metadata on the blob
-        path = file_directory + file_name + file_extension
-        blob_service_client = BlobServiceClient.from_connection_string(
-            azure_blob_connection_string)
-        blob_client = blob_service_client.get_blob_client(
-            container=azure_blob_drop_storage_container, blob=path)
-        blob_properties = blob_client.get_blob_properties()
-        tags = blob_properties.metadata.get("tags")
-        if tags is not None:
-            if isinstance(tags, str):
-                tags_list = [tags]
-            else:
-                tags_list = tags.split(",")
-        else:
-            tags_list = []
-        # Write the tags to cosmos db
-        statusLog.update_document_tags(blob_path, tags_list)
-
-        # Only one chunk per image currently.
-        chunk_file = utilities.build_chunk_filepath(
-            file_directory, file_name, file_extension, '0')
-
-        index_section(index_content, file_name, file_directory[:-1], statusLog.encode_document_id(
-            chunk_file), chunk_file, blob_path, blob_uri, tags_list)
-
-        statusLog.upsert_document(
-            blob_path,
-            f"{FUNCTION_NAME} - Media added to index.",
-            StatusClassification.INFO,
-            State.COMPLETE,
-        )
-    except Exception as err:
-        statusLog.upsert_document(
-            blob_path,
-            f"{FUNCTION_NAME} - An error occurred while indexing - {str(err)}",
-            StatusClassification.ERROR,
-            State.ERROR,
-        )
-
-    statusLog.save_document(blob_path) """
-
-
-def index_section(index_content, file_name, file_directory, chunk_id, chunk_file, blob_path, blob_uri, tags):
-    """ Pushes a batch of content to the search index
-    """
-
-    index_chunk = {}
-    batch = []
-    index_chunk['id'] = chunk_id
-    azure_datetime = datetime.now().astimezone().isoformat()
-    index_chunk['processed_datetime'] = azure_datetime
-    index_chunk['file_name'] = blob_path
-    index_chunk['file_uri'] = blob_uri
-    index_chunk['folder'] = file_directory
-    index_chunk['title'] = file_name
-    index_chunk['content'] = index_content
-    index_chunk['pages'] = [0]
-    index_chunk['chunk_file'] = chunk_file
-    index_chunk['file_class'] = MediaType.MEDIA
-    index_chunk['tags'] = tags
-    batch.append(index_chunk)
-
-    search_client = SearchClient(endpoint=AZURE_SEARCH_SERVICE_ENDPOINT,
-                                 index_name=AZURE_SEARCH_INDEX,
-                                 credential=SEARCH_CREDS)
-
-    search_client.upload_documents(documents=batch)
+    statusLog.save_document(blob_path) 
