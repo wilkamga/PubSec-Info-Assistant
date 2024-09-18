@@ -194,7 +194,7 @@ def main(msg: func.QueueMessage) -> None:
                             blob_path,
                             "Video: {file_name}, already exists.")
         else:
-            supported_extensions: list = ['.mp4', '.mov', '.avi']
+            supported_extensions: list = ['.mp4', '.mov', '.avi', '.mpg', '.wmv', '.wav', '.mp3']
 
             if file_extension not in supported_extensions:
                 print(f"Unsupported video format: {file_name}. Skipping...")

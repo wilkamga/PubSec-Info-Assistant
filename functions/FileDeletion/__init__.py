@@ -149,6 +149,7 @@ def main(mytimer: func.TimerRequest) -> None:
                 deleted_content_blobs = delete_content_blobs(blob_service_client, blob)
                 logging.info("%s content blobs deleted.", str(len(deleted_content_blobs)))
                 delete_search_entries(deleted_content_blobs)
+                 # TODO: Add a mechanism to delete videos in the video indexer and mediadb
                 status_log.delete_doc(blob)
 
                 # for doc in deleted_blobs:
