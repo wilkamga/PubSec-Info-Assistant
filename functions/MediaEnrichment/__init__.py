@@ -236,6 +236,9 @@ def main(msg: func.QueueMessage) -> None:
 
         try:
             prompt_content_db.create_db(db_name, vector_search_dimensions=embeddings_size)
+            #Section might already exist in index. Remove it first
+            prompt_content_db.remove_section(db_name, file_name)
+
             prompt_content_db.add_sections_to_db(sections_generator, upload_batch_size=100, verbose=verbose)
             statusLog.upsert_document(
                 blob_path,

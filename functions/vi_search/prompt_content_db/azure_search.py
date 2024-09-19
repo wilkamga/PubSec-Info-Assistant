@@ -246,3 +246,31 @@ class AzureVectorSearch(PromptContentDB):
                 raise RuntimeError("The count of the results is not equal to the count of the documents in the index")
 
         return results
+    
+    def remove_section(self, name: str, video_name) -> None:
+        ''' Removes index.
+
+        :param name: The name of the index
+        '''
+
+        #video_id = None  # The functional actually supports removing sections by video_id, but we don't use it
+        logger.info(f"Removing sections from '{video_name or '<all>'}' from search index '{name}'")
+
+        search_client = self._get_search_client(name)
+
+        total_count = 0
+        while True:
+            filter_ = None if video_name == None else f"video_name eq '{video_name}'"
+            r = search_client.search("", filter=filter_, top=1000, include_total_count=True)
+            if r.get_count() == 0:
+                break
+
+            r = search_client.delete_documents(documents=[{"id": d["id"]} for d in r])
+            logger.info(f"\tRemoved {len(r)} sections from index")
+
+            total_count += len(r)
+
+            # It can take a few seconds for search results to reflect changes, so wait a bit
+            time.sleep(2)
+
+        logger.info(f"Done removing sections from index. Total removed: {total_count}")

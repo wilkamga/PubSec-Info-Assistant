@@ -21,6 +21,10 @@ class PromptContentDB(ABC):
         pass
 
     @abstractmethod
+    def remove_section(self, name: str, video_name: str) -> None:
+        pass
+
+    @abstractmethod
     def get_available_dbs(self) -> list[str]:
         pass
 
